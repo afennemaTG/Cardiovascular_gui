@@ -11,23 +11,23 @@ from presets import pre_sets
 
 def solve_ode(t_span, x0, dict):
 
-    solver = RK45(
-        fun = lambda t,x: CM.ext_st_sp_eq(t,x, **dict),
-        t0 = t_span[0],
-        y0 = x0,
-        t_bound = t_span[1],
-        max_step = 0.01
-    )
+    # solver = RK45(
+    #     fun = lambda t,x: CM.ext_st_sp_eq(t,x, **dict),
+    #     t0 = t_span[0],
+    #     y0 = x0,
+    #     t_bound = t_span[1],
+    #     max_step = 0.005,
+    # )
 
-    solver.step()
-    state = solver.y
-    t = solver.t
+    # solver.step()
+    # state = solver.y
+    # t = solver.t
 
-    #solution = solve_ivp(lambda t,x: CM.ext_st_sp_eq(t,x, **dict), t_span, x0, method='RK45', rtol=1e-8, atol=1e-8)
+    solution = solve_ivp(lambda t,x: CM.ext_st_sp_eq(t,x, **dict), t_span, x0, method='RK45', rtol=1e-8, atol=1e-8)
 
     dict['fluids'] = 0 
 
-    return solver
+    return solution      #solver
 
 def calc_pressures(pressure):
 
@@ -79,6 +79,7 @@ class ODEGuiApp:
         self.dt = kwargs.get('dt', 0.01)    
         self.save = False
         self.par_adjusted = True
+        self.stab_thres = 5
 
         self.buffer_counter = 0
         self.buffer_interval = int(0.05/self.dt)
@@ -99,8 +100,17 @@ class ODEGuiApp:
         ttk.Button(controls_frame, text="Stop", command=self.stop).pack(side=tk.LEFT, padx=10)
         ttk.Button(controls_frame, text="Reset", command=self.reset).pack(side=tk.LEFT, padx=10)
 
+        save_frame = ttk.Frame(root) 
+        save_frame.pack(pady=10)
+        self.save_button = ttk.Button(save_frame, text="Save plot", command=self.saver)
+        self.save_button.pack(side=tk.LEFT, padx=10)
+        self.clear_button = ttk.Button(save_frame, text="Clear plot", command=self.clear_plot)
+        self.clear_button.pack(side=tk.LEFT, padx=10)
+        self.rescale_button = ttk.Button(save_frame, text="Rescale", command=self.rescale)
+        self.rescale_button.pack(side=tk.LEFT, padx=10)
+
         param_frame = ttk.Frame(root)
-        param_frame.pack(pady=10, side=tk.LEFT, padx=100)
+        param_frame.pack(pady=10, side=tk.LEFT, expand=True)
         self.sliders = {}
         self.sliders['SVR'] = self.add_slider(param_frame, "SVR", 0.5, 2.0, self.dict['SVR'], self.update_svr)
         self.sliders['F_ecmo'] = self.add_slider(param_frame, "ECMO flow", 0, 5000, self.dict['F_ecmo'], self.update_flow)
@@ -113,20 +123,34 @@ class ODEGuiApp:
         self.fluid_button_1000 = ttk.Button(param_frame, text="Give 1000ml fluids", command=lambda: self.update_fluid(1000))
         self.fluid_button_1000.pack(side=tk.LEFT, padx=5)
 
-        save_frame = ttk.Frame(root) 
-        save_frame.pack(pady=10, side=tk.LEFT, padx=10)
-        self.save_button = ttk.Button(save_frame, text="Save plot", command=self.saver)
-        self.save_button.pack(side=tk.LEFT, padx=10)
-        self.clear_button = ttk.Button(save_frame, text="Clear plot", command=self.clear_plot)
-        self.clear_button.pack(side=tk.LEFT, padx=10)
-        self.rescale_button = ttk.Button(save_frame, text="Rescale", command=self.rescale)
-        self.rescale_button.pack(side=tk.LEFT, padx=10)
+        buttons_frame = ttk.Frame(root)
+        buttons_frame.pack(pady=10, side=tk.LEFT, expand=True)
+        self.baro_button = tk.Button(buttons_frame, text="Baroreceptor OFF", bg='Tomato', command=self.toggle_baroreceptor)
+        self.baro_button.pack(side=tk.TOP, pady=10)
+        self.vent_button = tk.Button(buttons_frame, text="Ventilation OFF", bg='Tomato', command=self.toggle_ventilation)
+        self.vent_button.pack(side=tk.TOP, pady=10)
         preset_names = ["normal", "cardiogenic shock", "septic shock", 'case 1', 'case 2']
-        self.preset_menu = ttk.OptionMenu(save_frame, tk.StringVar(), "Presets", *preset_names, command=self.pre_set)
-        self.preset_menu.pack(side=tk.LEFT, padx=10)
+        self.preset_menu = ttk.OptionMenu(buttons_frame, tk.StringVar(), "Presets", *preset_names, command=self.pre_set)
+        self.preset_menu.pack(side=tk.TOP, pady=10)
+
+        empty_frame = ttk.Frame(root)
+        empty_frame.pack(pady=10, side=tk.LEFT, expand=True, padx=50)
+        self.empty_label = ttk.Label(empty_frame, text="This model is developed by A. Fennema \n in collaberation with the UMC Utrecht")
+        self.empty_label.pack(side=tk.TOP, padx=10)
 
     def init_model(self):
-        self.dict = {'F_ecmo': 0, 'contractility': 1, 'SVR': 1, 'compliance': 1, 'fluids': 0, 'HR': 70, 'P_set': 85}
+        self.dict = {'F_ecmo': 0, 
+                     'contractility': 1, 
+                     'SVR': 1, 
+                     'compliance': 1, 
+                     'fluids': 0, 
+                     'HR': 70, 
+                     'P_set': 85, 
+                     'baroreceptor': False,
+                     'ventilation': False}
+
+        global CM
+        CM = CardiovascularModel(self.dt)
 
         self.TBV = 5000
         self.current_state = np.zeros(13)
@@ -207,7 +231,7 @@ class ODEGuiApp:
             self.compliance_label = ttk.Label(frame, text=f"{var.get():.1f}")
             self.compliance_label.pack(side=tk.LEFT, padx=5)
         elif label == "Heart rate":
-            self.hr_label = ttk.Label(frame, text=f"{var.get():.1f} bpm")
+            self.hr_label = ttk.Label(frame, text=f"{var.get():.0f} bpm")
             self.hr_label.pack(side=tk.LEFT, padx=5)
 
         return slider
@@ -241,7 +265,7 @@ class ODEGuiApp:
 
     def update_hr(self, value):
         self.dict['HR'] = float(value)
-        self.hr_label.config(text=f"{float(value):.1f} bpm")   
+        self.hr_label.config(text=f"{float(value):.0f} bpm")   
 
         self.par_adjusted = True 
 
@@ -255,15 +279,35 @@ class ODEGuiApp:
 
         self.par_adjusted = True 
     
+    def toggle_baroreceptor(self):
+        if self.dict['baroreceptor']:
+            self.dict['baroreceptor'] = False
+            self.baro_button.config(text="Baroreceptor OFF", bg='tomato')
+        else:
+            self.dict['baroreceptor'] = True
+            self.baro_button.config(text="Baroreceptor ON", bg='chartreuse3')
+
+        self.par_adjusted = True
+
+    def toggle_ventilation(self):
+        if self.dict['ventilation']:
+            self.dict['ventilation'] = False
+            self.vent_button.config(text="Ventilation OFF", bg='tomato')
+            self.stab_thres = 5
+        else:
+            self.dict['ventilation'] = True
+            self.vent_button.config(text="Ventilation ON", bg='chartreuse3')
+            self.stab_thres = 8
+
+        self.par_adjusted = True
+        
     def pre_set(self, name):
 
         self.par_adjusted = True
         self.dict = pre_sets(name)
 
         for key, slider in self.sliders.items():
-            slider.set(self.dict[key])
-
-        
+            slider.set(self.dict[key]) 
 
 # PLOT CONTROLS
     def start(self):
@@ -289,10 +333,13 @@ class ODEGuiApp:
         self.old_line.set_data([], [])
         self.text_display.set_text("")
         self.text_display2.set_text("")
+        self.overlay.set_visible(False)
+        self.text.set_visible(False)
         self.canvas.draw()
 
         for key, slider in self.sliders.items():
             slider.set(self.dict[key])
+        self.baro_button.config(text="Baroreceptor OFF", bg='tomato') 
 
     def saver(self):
         self.save = not self.save
@@ -383,7 +430,7 @@ class ODEGuiApp:
             dbp_dif = abs(self.dbp_arr[-1] - self.dbp_arr[-2])
             sbp_dif = abs(self.sbp_arr[-1] - self.sbp_arr[-2])
 
-            if dbp_dif < 3 and sbp_dif < 3:
+            if dbp_dif < self.stab_thres and sbp_dif < self.stab_thres:
                 self.overlay.set_visible(False)
                 self.text.set_visible(False)
                 self.par_adjusted = False
@@ -395,7 +442,6 @@ class ODEGuiApp:
             self.overlay.set_visible(True)
             self.text.set_visible(True)
     
-
 # MAIN FUNCTION
     def run_simulation(self):
         if self.running:
@@ -403,17 +449,17 @@ class ODEGuiApp:
             self.t += self.dt
             t_span = (self.t, self.t + self.dt)
 
-            self.HR, ncc = CM.return_values()
+            self.HR = CM.return_values()
             
             solution = solve_ode(t_span, self.current_state, self.dict)
             ela = CM.cardiac_contraction(self.t, self.HR, self.adj_elastance)[1]
 
-            ao_pressure = self.adj_elastance[0,0] * (solution.y[0] - CM.uvolume[0])
-            lv_volume = solution.y[9]
+            ao_pressure = self.adj_elastance[0,0] * (solution.y[0,-1] - CM.uvolume[0])
+            lv_volume = solution.y[9,-1]
             lv_pressure = ela*(lv_volume - CM.uvolume[9])
             
-            P_pa = self.adj_elastance[0,1]*(solution.y[1] - CM.uvolume[1])
-            P_cv = self.adj_elastance[0,3]*(solution.y[3] - CM.uvolume[3])
+            P_pa = self.adj_elastance[0,1]*(solution.y[1,-1] - CM.uvolume[1])
+            P_cv = self.adj_elastance[0,3]*(solution.y[3,-1] - CM.uvolume[3])
             self.F_ecmo = CM.calc_ecmo_flow(self.dict['F_ecmo'], P_cv, P_pa)
             self.F_ecmo = self.F_ecmo*60/1000  # Convert to L/min
                 
@@ -423,7 +469,7 @@ class ODEGuiApp:
             self.lv_pressures.append(lv_pressure)
 
             self.time_values.append(self.time_elapsed*self.dt)   
-            self.current_state = solution.y[:]
+            self.current_state = solution.y[:,-1]
 
             # Store plot vlaues
             if self.time_values[-1] > 5: 
@@ -467,7 +513,6 @@ class ODEGuiApp:
 
 if __name__ == "__main__":
     time_step = 0.005
-    CM = CardiovascularModel(time_step)
     root = tk.Tk()
     root.state('zoomed')
     app = ODEGuiApp(root, dt = time_step)
