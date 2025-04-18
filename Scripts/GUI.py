@@ -70,8 +70,8 @@ class ODEGuiApp:
 
 # MODEL INITIALIZATION
     def __init__(self, root, **kwargs):
-        self.root = root
-        self.root.title(kwargs.get('title', 'Cardiovascular Model GUI'))
+        root.title(kwargs.get('title', 'Cardiovascular Model GUI'))
+        self.dark_mode = kwargs.get('dark_mode', False)
         self.running = False
         self.time_elapsed = 0
 
@@ -83,25 +83,40 @@ class ODEGuiApp:
 
         self.buffer_counter = 0
         self.buffer_interval = int(0.05/self.dt)
+
+        if self.dark_mode:
+            self.clr, self.clr_text = 'black', 'white'
+            root.configure(bg='black')
+        else:
+            self.clr, self.clr_text = 'white', 'black'
         
         self.init_model()
         self.init_plot()
         self.init_controls()
 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def init_controls(self):    
-        self.text_display = self.ax_pressure_time.text(1.02, 0.6, "", transform=self.ax_pressure_time.transAxes, fontsize=14, color="black", verticalalignment="top")
-        self.text_display2 = self.ax_pressure_time.text(1.02, 0.4, "", transform=self.ax_pressure_time.transAxes, fontsize=10, color="black", verticalalignment="top")
+        self.interaction_frame = tk.Frame(root)
+        self.interaction_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+        self.interaction_frame.rowconfigure(0, weight=1)
+        self.interaction_frame.rowconfigure(1, weight=1)
+        self.interaction_frame.rowconfigure(2, weight=1)
+        self.interaction_frame.columnconfigure(0, weight=1)
+        self.interaction_frame.columnconfigure(1, weight=1)
+        self.interaction_frame.columnconfigure(2, weight=1)
+
+        self.text_display = self.ax_pressure_time.text(1.02, 0.6, "", transform=self.ax_pressure_time.transAxes, fontsize=14, color=self.clr_text, verticalalignment="top")
+        self.text_display2 = self.ax_pressure_time.text(1.02, 0.4, "", transform=self.ax_pressure_time.transAxes, fontsize=10, color=self.clr_text, verticalalignment="top")
         
-        controls_frame = ttk.Frame(root)
-        controls_frame.pack(pady=10)
+        controls_frame = tk.Frame(self.interaction_frame)
+        controls_frame.grid(row=0, column=1)
         ttk.Button(controls_frame, text="Start", command=self.start).pack(side=tk.LEFT, padx=10)
         ttk.Button(controls_frame, text="Stop", command=self.stop).pack(side=tk.LEFT, padx=10)
         ttk.Button(controls_frame, text="Reset", command=self.reset).pack(side=tk.LEFT, padx=10)
 
-        save_frame = ttk.Frame(root) 
-        save_frame.pack(pady=10)
+        save_frame = ttk.Frame(self.interaction_frame) 
+        save_frame.grid(row=1, column=1, sticky='N')
         self.save_button = ttk.Button(save_frame, text="Save plot", command=self.saver)
         self.save_button.pack(side=tk.LEFT, padx=10)
         self.clear_button = ttk.Button(save_frame, text="Clear plot", command=self.clear_plot)
@@ -109,8 +124,8 @@ class ODEGuiApp:
         self.rescale_button = ttk.Button(save_frame, text="Rescale", command=self.rescale)
         self.rescale_button.pack(side=tk.LEFT, padx=10)
 
-        param_frame = ttk.Frame(root)
-        param_frame.pack(pady=10, side=tk.LEFT, expand=True)
+        param_frame = ttk.Frame(self.interaction_frame)
+        param_frame.grid(row=2, column=0, sticky='N')
         self.sliders = {}
         self.sliders['SVR'] = self.add_slider(param_frame, "SVR", 0.5, 2.0, self.dict['SVR'], self.update_svr)
         self.sliders['F_ecmo'] = self.add_slider(param_frame, "ECMO flow", 0, 5000, self.dict['F_ecmo'], self.update_flow)
@@ -123,8 +138,8 @@ class ODEGuiApp:
         self.fluid_button_1000 = ttk.Button(param_frame, text="Give 1000ml fluids", command=lambda: self.update_fluid(1000))
         self.fluid_button_1000.pack(side=tk.LEFT, padx=5)
 
-        buttons_frame = ttk.Frame(root)
-        buttons_frame.pack(pady=10, side=tk.LEFT, expand=True)
+        buttons_frame = ttk.Frame(self.interaction_frame)
+        buttons_frame.grid(row=2, column=1)
         self.baro_button = tk.Button(buttons_frame, text="Baroreceptor OFF", bg='Tomato', command=self.toggle_baroreceptor)
         self.baro_button.pack(side=tk.TOP, pady=10)
         self.vent_button = tk.Button(buttons_frame, text="Ventilation OFF", bg='Tomato', command=self.toggle_ventilation)
@@ -133,9 +148,12 @@ class ODEGuiApp:
         self.preset_menu = ttk.OptionMenu(buttons_frame, tk.StringVar(), "Presets", *preset_names, command=self.pre_set)
         self.preset_menu.pack(side=tk.TOP, pady=10)
 
-        empty_frame = ttk.Frame(root)
-        empty_frame.pack(pady=10, side=tk.LEFT, expand=True, padx=50)
-        self.empty_label = ttk.Label(empty_frame, text="This model is developed by A. Fennema \n in collaberation with the UMC Utrecht")
+        empty_frame = ttk.Frame(self.interaction_frame)
+        empty_frame.grid(row=2, column=2)
+        self.empty_label = ttk.Label(empty_frame, 
+                                     text="Disclaimer: \nThis simulation is for educational purposes only \n and should not be used for medical purposes.",
+                                     justify='center',
+                                     font=("Arial Black", 10))
         self.empty_label.pack(side=tk.TOP, padx=10)
 
     def init_model(self):
@@ -167,24 +185,39 @@ class ODEGuiApp:
         self.sbp_arr = [0,0]
 
     def init_plot(self):
+        self.plot_frame = tk.Frame(root, bg=self.clr)
+        self.plot_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
         # Get screen resolution
         dpi = int(root.winfo_fpixels('1i'))  
         scr_width = root.winfo_screenwidth() / dpi
         scr_height = root.winfo_screenheight() / dpi
 
-        self.fig = plt.figure(figsize=(scr_width, scr_height*0.6), dpi=dpi)
-        gs = self.fig.add_gridspec(1, 2, width_ratios=[2, 1], wspace=0.35, left=0.05, right=0.95)
+        self.fig = plt.figure(figsize=(scr_width, scr_height*0.6), dpi=dpi, facecolor=self.clr)
+        gs = self.fig.add_gridspec(1, 2, width_ratios=[2, 1], wspace=0.4, left=0.05, right=0.95)
         self.ax_pressure_time = self.fig.add_subplot(gs[0])
         self.ax_pressure_volume = self.fig.add_subplot(gs[1])
-        self.ax_pressure_time.set_xlim(0,5)
         
         self.min_val, self.max_val = 80, 100
         self.x_lim, self.y_lim = 100, 100
-        
-        self.ax_pressure_time.set(title="Pressure over Time", xlabel="Time (s)", ylabel="Pressure (mmHg)", xlim=(0, 5))
-        self.ax_pressure_volume.set(title="LV pressure-volume loop", xlabel="Volume (mL)", ylabel="Pressure (mmHg)")
-        
+
+        self.ax_pressure_time.set_facecolor(self.clr)
+        self.ax_pressure_time.set_title("Pressure over Time", color=self.clr_text)
+        self.ax_pressure_time.set_xlabel("Time (s)", color=self.clr_text)
+        self.ax_pressure_time.set_ylabel("Pressure (mmHg)", color=self.clr_text)
+        self.ax_pressure_time.tick_params(axis='both', colors=self.clr_text)
+        self.ax_pressure_time.set_xlim(0, 5)
+
+        self.ax_pressure_volume.set_facecolor(self.clr)
+        self.ax_pressure_volume.set_title("LV pressure-volume loop", color=self.clr_text)
+        self.ax_pressure_volume.set_xlabel("Volume (mL)", color=self.clr_text)
+        self.ax_pressure_volume.set_ylabel("Pressure (mmHg)", color=self.clr_text)
+        self.ax_pressure_volume.tick_params(axis='both', colors=self.clr_text)
+        self.ax_pressure_volume.set(xlim=(0,self.x_lim), ylim=(0,self.y_lim))
+
+        self.ax_pressure_time.tick_params(length=0) if self.dark_mode else None
+        self.ax_pressure_volume.tick_params(length=0) if self.dark_mode else None
+
         self.line_pt, = self.ax_pressure_time.plot([], [], lw=2, color='tab:blue')
         self.old_line, = self.ax_pressure_time.plot([], [], lw=2, color='tab:blue')
         self.saved_line_pt, = self.ax_pressure_time.plot([], [], lw=2, color='tab:blue', alpha=0.2)
@@ -200,8 +233,8 @@ class ODEGuiApp:
         self.text.set_visible(False)  
         self.stabalizing = False
                 
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
-        self.canvas.get_tk_widget().pack()
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.canvas.draw()
 
         plt.tight_layout()
@@ -273,8 +306,8 @@ class ODEGuiApp:
         self.dict['fluids'] = ml
         self.fluid_button_500.config(state=tk.DISABLED)
         self.fluid_button_1000.config(state=tk.DISABLED)
-        self.root.after(10000, self.fluid_button_500.config, {'state': tk.NORMAL})
-        self.root.after(10000, self.fluid_button_1000.config, {'state': tk.NORMAL})
+        root.after(10000, self.fluid_button_500.config, {'state': tk.NORMAL})
+        root.after(10000, self.fluid_button_1000.config, {'state': tk.NORMAL})
         self.TBV = self.TBV + ml
 
         self.par_adjusted = True 
@@ -505,16 +538,16 @@ class ODEGuiApp:
             if self.buffer_counter >= self.buffer_interval:
                 self.update_plot()
             
-            self.root.after(1, self.run_simulation)
+            root.after(1, self.run_simulation)
     
     def on_closing(self):
         self.running = False  # Stop the simulation loop
-        self.root.quit()
-        self.root.destroy()
+        root.quit()
+        root.destroy()
 
 if __name__ == "__main__":
     time_step = 0.005
     root = tk.Tk()
     root.state('zoomed')
-    app = ODEGuiApp(root, dt = time_step)
+    app = ODEGuiApp(root, dt = time_step, dark_mode=False)
     root.mainloop()
