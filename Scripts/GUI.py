@@ -304,7 +304,8 @@ class ODEGuiApp:
     def pre_set(self, name):
 
         self.par_adjusted = True
-        self.dict = pre_sets(name)
+        pre_set_dict = pre_sets(name)
+        self.dict.update({k: pre_set_dict[k] for k in pre_set_dict if k in self.dict})
 
         for key, slider in self.sliders.items():
             slider.set(self.dict[key]) 
