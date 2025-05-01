@@ -15,19 +15,19 @@ class CardiovascularModel:
         self.elastance[:, 0] = [1.43, np.nan]      # Intra-thoracic arteries
         self.elastance[:, 1] = [0.8, np.nan]       # Extra-thoracic arteries
         self.elastance[:, 2] = [0.0169, np.nan]    # Extra-thoracic veins
-        self.elastance[:, 3] = [0.0182, np.nan]    # Intra-thoracic veins
+        self.elastance[:, 3] = [0.0082, np.nan]    # Intra-thoracic veins
         self.elastance[:, 4] = [0.05, 0.12]        # Right atrium (min, max)
         self.elastance[:, 5] = [0.057, 0.40]       # Right ventricle (min, max)
         self.elastance[:, 6] = [0.233, np.nan]     # Pulmonary arteries
         self.elastance[:, 7] = [0.0455, np.nan]    # Pulmonary veins
         self.elastance[:, 8] = [0.12, 0.4]        # Left atrium (min, max)
-        self.elastance[:, 9] = [0.09, 3]           # Left ventricle (min, max)
+        self.elastance[:, 9] = [0.08, 3]           # Left ventricle (min, max)
 
         self.resistance = np.array([
             0.2,   # Intra-thoracic arteries
             0.5,   # Extra-thoracic arteries
             0.09,   # Extra-thoracic veins
-            0.003,  # Intra-thoracic veins
+            0.03,  # Intra-thoracic veins
             0.003,  # Right atrium
             0.003,  # Right ventricle
             0.11,   # Pulmonary arteries
@@ -57,6 +57,13 @@ class CardiovascularModel:
 
         self.HR_c = 70
         self.P_set = 85
+
+        # Export variables
+        self.P_intra = 0
+        self.elv = 0
+        self.Plv = 0
+        self.Pao = 0
+        self.Pla = 0
         
         self.Fes_delayed = np.full(int(2/self.dt), 2.66).tolist()
         self.Fev_delayed = np.zeros(int(0.2/self.dt)).tolist() #np.full(int(0.2/self.dt), 4.66).tolist()
@@ -123,6 +130,8 @@ class CardiovascularModel:
         T = self.dt 
         
         ncc = (phi / HP) / T
+
+        #ncc = (t % HP) / T
         
         if ncc <= round(Tas / T):
             aaf = np.sin(np.pi * ncc / (Tas / T))
@@ -145,7 +154,29 @@ class CardiovascularModel:
         erv = adj_elastance[0, 5] + (adj_elastance[1, 5] - adj_elastance[0, 5]) * vaf
 
         return ela, elv, era, erv
-    
+
+    def cardiac_contraction_DH(self, t, HR, adj_elastance):
+        
+        phi = self.cardiac_phase(t, HR)
+
+        HP = 60/self.HR_c
+        m1 = [1.32, 1.32, 1.32, 1.32]
+        m2 = [13.1, 27.4, 13.1, 27.4]
+        tau1 = [0.11*HP, 0.269*HP, 0.11*HP, 0.269*HP]
+        tau2 = [0.18*HP, 0.452*HP, 0.18*HP, 0.452*HP]
+        onset = [0, 0.15*HP, 0, 0.15*HP]
+
+        E = np.zeros(4)
+        for i, c in enumerate([8, 9, 4, 5]):
+            Emin, Emax = adj_elastance[0, c], adj_elastance[1, c]
+            t = phi - onset[i] if phi - onset[i] > 0 else 0
+            g1, g2 = ((t)/tau1[i])**m1[i], ((t)/tau2[i])**m2[i]
+            
+            a = 1.516 # Derived from the double hill curve to ensure E goes to Emax
+            E[i] = Emax*a*(g1/(1+g1) * 1/(1+g2)) + Emin
+        
+        return E
+
     def baroreceptor_control(self, P, dVdt, elastance, P_set, Pbaro, dHRv, dHRh):
         # Baroreceptor control
         tz = 6.37
@@ -211,9 +242,17 @@ class CardiovascularModel:
 
         return P_intra
 
-    def return_values(self):
+    def export_function(self):
         # Return parameters for GUI
-        return self.HR_c
+        export_dict = {
+            'HR': self.HR_c,
+            'P_intra': self.P_intra,
+            'elv': self.elv,
+            'Plv': self.Plv,
+            'Pao': self.Pao,
+            'Pla': self.Pla}
+        
+        return export_dict
 
     def ext_st_sp_eq(self, t, x, **kwargs):
 
@@ -235,7 +274,7 @@ class CardiovascularModel:
         DHRv = x[11] 
         DHRh = x[12]
 
-        P_intra = self.mechanical_ventilation(t) if ventilation == True else 0
+        self.P_intra = self.mechanical_ventilation(t) if ventilation == True else 0
 
         self.HP = 60 / HR + DHRv + DHRh if baro_recept == True else 60 / HR
         R_c = fSVR #+ DR
@@ -254,14 +293,14 @@ class CardiovascularModel:
 
         # Calculate pressures
         P = np.zeros(10)
-        P[0] = adj_elastance[0, 0] * (V[0] - self.uvolume[0]) + P_intra
+        P[0] = adj_elastance[0, 0] * (V[0] - self.uvolume[0]) + self.P_intra
         P[1] = adj_elastance[0, 1] * (V[1] - self.uvolume[1])
         P[2] = adj_elastance[0, 2] * (V[2] - self.uvolume[2])
-        P[3] = adj_elastance[0, 3] * (V[3] - self.uvolume[3]) + P_intra
+        P[3] = adj_elastance[0, 3] * (V[3] - self.uvolume[3]) + self.P_intra
         P[4] = era * (V[4] - self.uvolume[4])
         P[5] = erv * (V[5] - self.uvolume[5]) 
-        P[6] = adj_elastance[0, 6] * (V[6] - self.uvolume[6]) + P_intra
-        P[7] = adj_elastance[0, 7] * (V[7] - self.uvolume[7]) + P_intra
+        P[6] = adj_elastance[0, 6] * (V[6] - self.uvolume[6]) + self.P_intra
+        P[7] = adj_elastance[0, 7] * (V[7] - self.uvolume[7]) + self.P_intra
         P[8] = ela * (V[8] - self.uvolume[8]) 
         P[9] = elv * (V[9] - self.uvolume[9]) 
 
@@ -302,6 +341,12 @@ class CardiovascularModel:
         dxdt = np.zeros(len(dVdt) + len(dBarodt))
         dxdt[:len(dVdt)] = dVdt
         dxdt[len(dVdt):] = dBarodt
+
+        # Export variables
+        self.elv = elv
+        self.Plv = P[9]
+        self.Pao = P[0]
+        self.Pla = P[8]
 
         return dxdt
 

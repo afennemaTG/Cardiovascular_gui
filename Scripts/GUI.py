@@ -65,6 +65,50 @@ def calc_co(volumes, HR):
 
     return CO
 
+def calc_ESVPR(lv_volumes, lv_pressure, ao_pressure, la_pressure, uvolume):
+    
+    if len(lv_volumes) < 2:
+        return None
+    
+    t_open = np.where(np.array(lv_pressure) > np.array(ao_pressure))[0]
+    t_close = np.where(np.array(lv_pressure) < np.array(ao_pressure))[0]
+    t_open_mitr = np.where(np.array(lv_pressure) < np.array(la_pressure))[0]
+    t_close_mitr = np.where(np.array(lv_pressure) > np.array(la_pressure))[0]
+
+    if not (t_open.size and t_close.size and t_open_mitr.size and t_close_mitr.size):   
+        return None
+    
+    vlv_close = np.where(t_close > t_open[-1])[0]
+    mitr_close = np.where(t_close_mitr > t_open_mitr[-1])[0]
+
+    if vlv_close.size > 0: 
+        ESV = np.linspace(uvolume[9], lv_volumes[t_close[vlv_close[0]]-1]*2-uvolume[9], 100)
+        ESP = np.linspace(0, lv_pressure[t_close[vlv_close[0]]-1]*2, 100)
+
+        ESVPR_slope = (ESP[-1] - ESP[0]) / (ESV[-1] - ESV[0])
+        ESVPR_offset = ESP[0] - ESVPR_slope * ESV[0]
+
+        ESV = np.linspace(0, 1000, 100)
+        ESP = ESVPR_slope * ESV + ESVPR_offset
+    else:
+        ESV = None
+        ESP = None
+
+    if mitr_close.size > 0 and vlv_close.size > 0:
+        EDV = np.linspace(lv_volumes[t_close_mitr[mitr_close[0]]-1], lv_volumes[t_close[vlv_close[0]]-1], 100)
+        EDP = np.linspace(0, lv_pressure[t_close[vlv_close[0]]-1], 100)
+
+        EA_slope = (EDP[-1] - EDP[0]) / (EDV[-1] - EDV[0])
+        EA_offset = EDP[0] - EA_slope * EDV[0]
+        
+        EDV = np.linspace(0, 1000, 100)
+        EDP = EA_slope * EDV + EA_offset
+    
+    else:
+        EDV = None
+        EDP = None
+    
+    return ESV, ESP, EDV, EDP
 
 class ODEGuiApp:
 
@@ -79,6 +123,7 @@ class ODEGuiApp:
         self.dt = kwargs.get('dt', 0.01)    
         self.save = False
         self.par_adjusted = True
+        self.esvpr_ea = False
         self.stab_thres = 5
 
         self.buffer_counter = 0
@@ -97,7 +142,13 @@ class ODEGuiApp:
         root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def init_controls(self):    
-        self.interaction_frame = tk.Frame(root)
+        style = ttk.Style()
+        style.configure('TButton', background=self.clr, foreground='black')
+        style.configure('TLabel', background=self.clr, foreground=self.clr_text)
+        style.configure('TFrame', background=self.clr)
+        style.configure('TScale', background=self.clr, troughcolor=self.clr, sliderlength=20)
+
+        self.interaction_frame = ttk.Frame(root)
         self.interaction_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
         self.interaction_frame.rowconfigure(0, weight=1)
         self.interaction_frame.rowconfigure(1, weight=1)
@@ -109,7 +160,7 @@ class ODEGuiApp:
         self.text_display = self.ax_pressure_time.text(1.02, 0.6, "", transform=self.ax_pressure_time.transAxes, fontsize=14, color=self.clr_text, verticalalignment="top")
         self.text_display2 = self.ax_pressure_time.text(1.02, 0.4, "", transform=self.ax_pressure_time.transAxes, fontsize=10, color=self.clr_text, verticalalignment="top")
         
-        controls_frame = tk.Frame(self.interaction_frame)
+        controls_frame = ttk.Frame(self.interaction_frame)
         controls_frame.grid(row=0, column=1)
         ttk.Button(controls_frame, text="Start", command=self.start).pack(side=tk.LEFT, padx=10)
         ttk.Button(controls_frame, text="Stop", command=self.stop).pack(side=tk.LEFT, padx=10)
@@ -148,8 +199,14 @@ class ODEGuiApp:
         self.preset_menu = ttk.OptionMenu(buttons_frame, tk.StringVar(), "Presets", *preset_names, command=self.pre_set)
         self.preset_menu.pack(side=tk.TOP, pady=10)
 
+        PV_controls_frame = ttk.Frame(self.interaction_frame)
+        PV_controls_frame.grid(row=1, column=2, sticky='N')
+        self.esvpr_ea_button = ttk.Button(PV_controls_frame, text="display ESVPR and EA", command=self.toggle_esvpr_ea)
+        self.esvpr_ea_button.pack(side=tk.TOP, pady=10)
+
         empty_frame = ttk.Frame(self.interaction_frame)
         empty_frame.grid(row=2, column=2)
+        
         self.empty_label = ttk.Label(empty_frame, 
                                      text="Disclaimer: \nThis simulation is for educational purposes only \n and should not be used for medical purposes.",
                                      justify='center',
@@ -178,6 +235,7 @@ class ODEGuiApp:
 
         self.ao_pressures, self.time_values = [], []
         self.lv_pressures, self.lv_volumes =  [], []
+        self.la_pressures = []
         self.old_time_values, self.old_pressure_values = [], []
         self.adj_elastance = CM.adjust_elastance(self.dict['contractility'], self.dict['compliance'])
 
@@ -223,7 +281,11 @@ class ODEGuiApp:
         self.saved_line_pt, = self.ax_pressure_time.plot([], [], lw=2, color='tab:blue', alpha=0.2)
 
         self.line_pv, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:red')
-        self.saved_line_pv, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:red', alpha=0.2)	
+        self.saved_line_pv, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:red', alpha=0.2)   
+        self.ESVPR = None
+        self.ESP, self.ESV, self.EDV, self.EDP = np.linspace(0,1,100), np.linspace(0,1,100), np.linspace(0,1,100), np.linspace(0,1,100)
+        self.line_ESVPR, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:green', alpha=0.5)
+        self.line_Ea, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:orange', alpha=0.5)
 
         # Stabalizing overlay
         self.overlay = self.ax_pressure_time.axhspan(0, 300, color='gray', alpha=0.4, zorder=5)
@@ -334,6 +396,16 @@ class ODEGuiApp:
 
         self.par_adjusted = True
         
+    def toggle_esvpr_ea(self):
+        if self.esvpr_ea:
+            self.esvpr_ea = False
+            self.line_ESVPR.set_data([], [])
+            self.line_Ea.set_data([], [])
+            self.esvpr_ea_button.config(text="display ESVPR and EA")
+        else:
+            self.esvpr_ea = True
+            self.esvpr_ea_button.config(text="hide ESVPR and EA")
+    
     def pre_set(self, name):
 
         self.par_adjusted = True
@@ -356,6 +428,7 @@ class ODEGuiApp:
         self.running = False
         self.time_elapsed = 0
         self.t = 0
+        self.esvpr_ea = False
 
         self.clear_plot()
         self.init_model()
@@ -365,6 +438,8 @@ class ODEGuiApp:
         self.saved_line_pt.set_data([], [])
         self.saved_line_pv.set_data([], [])
         self.old_line.set_data([], [])
+        self.line_ESVPR.set_data([], [])
+        self.line_Ea.set_data([], [])
         self.text_display.set_text("")
         self.text_display2.set_text("")
         self.overlay.set_visible(False)
@@ -374,6 +449,8 @@ class ODEGuiApp:
         for key, slider in self.sliders.items():
             slider.set(self.dict[key])
         self.baro_button.config(text="Baroreceptor OFF", bg='tomato') 
+        self.vent_button.config(text="Ventilation OFF", bg='tomato')
+        self.esvpr_ea_button.config(text="display ESVPR and EA")
 
     def saver(self):
         self.save = not self.save
@@ -421,6 +498,8 @@ class ODEGuiApp:
         # Update current line
         self.line_pt.set_data(self.time_values, self.ao_pressures[-len(self.time_values):])
         self.line_pv.set_data(self.lv_volumes[-(beat-skip):], self.lv_pressures[-(beat-skip):])
+
+        self.plot_ESVPR_EA(beat, skip) if self.esvpr_ea == True else None
 
         if self.save:
             self.saved_line_pt.set_data(self.saved_time_values, self.saved_ao_pressure)
@@ -475,7 +554,27 @@ class ODEGuiApp:
         elif self.par_adjusted == True:
             self.overlay.set_visible(True)
             self.text.set_visible(True)
-    
+
+    def plot_ESVPR_EA(self, beat, skip):
+        self.ESVPR = calc_ESVPR(self.lv_volumes[-(beat-skip):], 
+                                self.lv_pressures[-(beat-skip):],
+                                self.ao_pressures[-(beat-skip):],
+                                self.la_pressures[-(beat-skip):],
+                                CM.uvolume)
+        
+        if self.ESVPR is not None:
+            if self.ESVPR[0] is not None:
+                self.ESV = self.ESVPR[0]
+            if self.ESVPR[1] is not None:
+                self.ESP = self.ESVPR[1]
+            if self.ESVPR[2] is not None:
+                self.EDV = self.ESVPR[2]
+            if self.ESVPR[3] is not None:
+                self.EDP = self.ESVPR[3]
+                
+        self.line_ESVPR.set_data(self.ESV, self.ESP) 
+        self.line_Ea.set_data(self.EDV, self.EDP)
+
 # MAIN FUNCTION
     def run_simulation(self):
         if self.running:
@@ -483,14 +582,15 @@ class ODEGuiApp:
             self.t += self.dt
             t_span = (self.t, self.t + self.dt)
 
-            self.HR = CM.return_values()
-            
-            solution = solve_ode(t_span, self.current_state, self.dict)
-            ela = CM.cardiac_contraction(self.t, self.HR, self.adj_elastance)[1]
+            import_dict = CM.export_function()
+            self.HR = import_dict['HR']
+            elv = import_dict['elv']
+            lv_pressure = import_dict['Plv']
+            ao_pressure = import_dict['Pao']
+            la_pressure = import_dict['Pla']
 
-            ao_pressure = self.adj_elastance[0,0] * (solution.y[0,-1] - CM.uvolume[0])
+            solution = solve_ode(t_span, self.current_state, self.dict)
             lv_volume = solution.y[9,-1]
-            lv_pressure = ela*(lv_volume - CM.uvolume[9])
             
             P_pa = self.adj_elastance[0,1]*(solution.y[1,-1] - CM.uvolume[1])
             P_cv = self.adj_elastance[0,3]*(solution.y[3,-1] - CM.uvolume[3])
@@ -501,6 +601,7 @@ class ODEGuiApp:
             self.ao_pressures.append(ao_pressure)
             self.lv_volumes.append(lv_volume)
             self.lv_pressures.append(lv_pressure)
+            self.la_pressures.append(la_pressure)
 
             self.time_values.append(self.time_elapsed*self.dt)   
             self.current_state = solution.y[:,-1]
@@ -549,5 +650,5 @@ if __name__ == "__main__":
     time_step = 0.005
     root = tk.Tk()
     root.state('zoomed')
-    app = ODEGuiApp(root, dt = time_step, dark_mode=False)
+    app = ODEGuiApp(root, dt = time_step, dark_mode=True)
     root.mainloop()
