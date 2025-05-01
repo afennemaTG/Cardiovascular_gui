@@ -4,6 +4,8 @@ import numpy as np
 from scipy.integrate import solve_ivp, RK45
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import sys
+import subprocess
 
 from cardiovascular_model_2 import CardiovascularModel
 from presets import pre_sets
@@ -132,8 +134,10 @@ class ODEGuiApp:
         if self.dark_mode:
             self.clr, self.clr_text = 'black', 'white'
             root.configure(bg='black')
+            self.button_text = 'Light mode'
         else:
             self.clr, self.clr_text = 'white', 'black'
+            self.button_text = 'Dark mode'
         
         self.init_model()
         self.init_plot()
@@ -160,6 +164,11 @@ class ODEGuiApp:
         self.text_display = self.ax_pressure_time.text(1.02, 0.6, "", transform=self.ax_pressure_time.transAxes, fontsize=14, color=self.clr_text, verticalalignment="top")
         self.text_display2 = self.ax_pressure_time.text(1.02, 0.4, "", transform=self.ax_pressure_time.transAxes, fontsize=10, color=self.clr_text, verticalalignment="top")
         
+        dark_mode_frame = ttk.Frame(self.interaction_frame)
+        dark_mode_frame.grid(row=0, column=0, sticky='NW')
+        self.dark_mode_button = tk.Button(dark_mode_frame, text=self.button_text, command=self.restart_new_mode)
+        self.dark_mode_button.pack(side=tk.TOP, padx=50, pady=10)
+
         controls_frame = ttk.Frame(self.interaction_frame)
         controls_frame.grid(row=0, column=1)
         ttk.Button(controls_frame, text="Start", command=self.start).pack(side=tk.LEFT, padx=10)
@@ -282,10 +291,13 @@ class ODEGuiApp:
 
         self.line_pv, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:red')
         self.saved_line_pv, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:red', alpha=0.2)   
+        
         self.ESVPR = None
         self.ESP, self.ESV, self.EDV, self.EDP = np.linspace(0,1,100), np.linspace(0,1,100), np.linspace(0,1,100), np.linspace(0,1,100)
-        self.line_ESVPR, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:green', alpha=0.5)
-        self.line_Ea, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:orange', alpha=0.5)
+        self.line_ESVPR, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:green', alpha=0.8)
+        self.line_Ea, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:orange', alpha=0.8)
+        self.saved_line_esvpr, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:green', alpha=0.4)
+        self.saved_line_ea, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:orange', alpha=0.4)
 
         # Stabalizing overlay
         self.overlay = self.ax_pressure_time.axhspan(0, 300, color='gray', alpha=0.4, zorder=5)
@@ -469,10 +481,16 @@ class ODEGuiApp:
         self.saved_lv_pressure = []
         self.saved_ao_pressure = []
         self.saved_time_values = []
+        self.ESV_saved = []
+        self.ESP_saved = []
+        self.EDV_saved = []
+        self.EDP_saved = []
 
         if hasattr(self, 'saved_line_pt') and hasattr(self, 'saved_line_pv'):
             self.saved_line_pt.set_data([], [])
             self.saved_line_pv.set_data([], [])
+            self.saved_line_esvpr.set_data([], [])
+            self.saved_line_ea.set_data([], [])
             self.canvas.draw()
     
     def rescale(self):
@@ -499,11 +517,16 @@ class ODEGuiApp:
         self.line_pt.set_data(self.time_values, self.ao_pressures[-len(self.time_values):])
         self.line_pv.set_data(self.lv_volumes[-(beat-skip):], self.lv_pressures[-(beat-skip):])
 
-        self.plot_ESVPR_EA(beat, skip) if self.esvpr_ea == True else None
+        self.calc_ESVPR_EA(beat, skip) 
+
+        self.line_ESVPR.set_data(self.ESV, self.ESP) if self.esvpr_ea else None
+        self.line_Ea.set_data(self.EDV, self.EDP) if self.esvpr_ea else None
 
         if self.save:
             self.saved_line_pt.set_data(self.saved_time_values, self.saved_ao_pressure)
             self.saved_line_pv.set_data(self.saved_lv_volume, self.saved_lv_pressure)
+            self.saved_line_esvpr.set_data(self.ESV_saved, self.ESP_saved) if self.esvpr_ea else None
+            self.saved_line_ea.set_data(self.EDV_saved, self.EDP_saved) if self.esvpr_ea else None
 
         sbp, dbp, map, pp = calc_pressures(self.ao_pressures[-int(beat*1.5):])
         self.cardiac_output = calc_co(self.lv_volumes[-int(beat*1.5):], self.HR)
@@ -555,7 +578,7 @@ class ODEGuiApp:
             self.overlay.set_visible(True)
             self.text.set_visible(True)
 
-    def plot_ESVPR_EA(self, beat, skip):
+    def calc_ESVPR_EA(self, beat, skip):
         self.ESVPR = calc_ESVPR(self.lv_volumes[-(beat-skip):], 
                                 self.lv_pressures[-(beat-skip):],
                                 self.ao_pressures[-(beat-skip):],
@@ -572,8 +595,14 @@ class ODEGuiApp:
             if self.ESVPR[3] is not None:
                 self.EDP = self.ESVPR[3]
                 
-        self.line_ESVPR.set_data(self.ESV, self.ESP) 
-        self.line_Ea.set_data(self.EDV, self.EDP)
+    def restart_new_mode(self):
+        # Show confirmation dialog
+        confirm = tk.messagebox.askyesno("Confirm Restart", f"The application will restart in {self.button_text}. Continue?")
+        if confirm:
+            mode = not self.dark_mode 
+            subprocess.Popen([sys.executable, __file__, str(mode)])
+            root.destroy()
+            sys.exit()
 
 # MAIN FUNCTION
     def run_simulation(self):
@@ -625,9 +654,17 @@ class ODEGuiApp:
                 if self.time_elapsed == 0:     
                     self.saved_ao_pressure.append(np.nan)
                     self.saved_time_values.append(0)
+                    self.ESV_saved = self.ESV.copy()
+                    self.ESP_saved = self.ESP.copy()
+                    self.EDV_saved = self.EDV.copy()
+                    self.EDP_saved = self.EDP.copy()
                 else:
                     self.saved_ao_pressure.append(ao_pressure)
                     self.saved_time_values.append(self.time_elapsed*self.dt)
+                    self.ESV_saved = self.ESV.copy()
+                    self.ESP_saved = self.ESP.copy()
+                    self.EDV_saved = self.EDV.copy()
+                    self.EDP_saved = self.EDP.copy()
                 
                 self.saved_lv_volume.append(self.lv_volumes[-1])
                 self.saved_lv_pressure.append(self.lv_pressures[-1])
@@ -647,8 +684,14 @@ class ODEGuiApp:
         root.destroy()
 
 if __name__ == "__main__":
+
+    if len(sys.argv) > 1:
+        mode = sys.argv[1].lower() == 'true'
+    else:
+        mode = False
+
     time_step = 0.005
     root = tk.Tk()
     root.state('zoomed')
-    app = ODEGuiApp(root, dt = time_step, dark_mode=True)
+    app = ODEGuiApp(root, dt = time_step, dark_mode=mode)
     root.mainloop()
