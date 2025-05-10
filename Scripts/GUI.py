@@ -84,33 +84,33 @@ def calc_ESVPR(lv_volumes, lv_pressure, ao_pressure, la_pressure, uvolume):
     mitr_close = np.where(t_close_mitr > t_open_mitr[-1])[0]
 
     if vlv_close.size > 0: 
-        ESV = np.linspace(uvolume[9], lv_volumes[t_close[vlv_close[0]]-1]*2-uvolume[9], 100)
-        ESP = np.linspace(0, lv_pressure[t_close[vlv_close[0]]-1]*2, 100)
+        ESV = lv_volumes[t_close[vlv_close[0]]-1]
+        ESP = lv_pressure[t_close[vlv_close[0]]-1]
 
-        ESVPR_slope = (ESP[-1] - ESP[0]) / (ESV[-1] - ESV[0])
-        ESVPR_offset = ESP[0] - ESVPR_slope * ESV[0]
+        ESVPR_slope = (ESP - 0) / (ESV - uvolume[9])
+        ESVPR_offset = 0 - ESVPR_slope * uvolume[9]
 
-        ESV = np.linspace(0, 1000, 100)
-        ESP = ESVPR_slope * ESV + ESVPR_offset
+        ESPVR_1 = np.linspace(0, 1000, 100)
+        ESPVR_2 = ESVPR_slope * ESPVR_1 + ESVPR_offset
     else:
-        ESV = None
-        ESP = None
+        ESPVR_1 = None
+        ESPVR_2 = None
 
     if mitr_close.size > 0 and vlv_close.size > 0:
-        EDV = np.linspace(lv_volumes[t_close_mitr[mitr_close[0]]-1], lv_volumes[t_close[vlv_close[0]]-1], 100)
-        EDP = np.linspace(0, lv_pressure[t_close[vlv_close[0]]-1], 100)
+        EDV = lv_volumes[t_close_mitr[mitr_close[0]]-1]
+        EDP = lv_pressure[t_close_mitr[mitr_close[0]]-1]
 
-        EA_slope = (EDP[-1] - EDP[0]) / (EDV[-1] - EDV[0])
-        EA_offset = EDP[0] - EA_slope * EDV[0]
+        EA_slope = (ESP - 0) / (ESV - EDV)
+        EA_offset = 0 - EA_slope * EDV
         
-        EDV = np.linspace(0, 1000, 100)
-        EDP = EA_slope * EDV + EA_offset
+        EA_1 = np.linspace(0, 1000, 100)
+        EA_2 = EA_slope * EA_1 + EA_offset
     
     else:
-        EDV = None
-        EDP = None
+        EA_1 = None
+        EA_2 = None
     
-    return ESV, ESP, EDV, EDP
+    return ESPVR_1, ESPVR_2, EA_1, EA_2
 
 class ODEGuiApp:
 
@@ -147,7 +147,8 @@ class ODEGuiApp:
 
     def init_controls(self):    
         style = ttk.Style()
-        style.configure('TButton', background=self.clr, foreground='black')
+        style.theme_use('vista')
+        style.configure('TButton', background=self.clr)
         style.configure('TLabel', background=self.clr, foreground=self.clr_text)
         style.configure('TFrame', background=self.clr)
         style.configure('TScale', background=self.clr, troughcolor=self.clr, sliderlength=20)
@@ -160,9 +161,6 @@ class ODEGuiApp:
         self.interaction_frame.columnconfigure(0, weight=1)
         self.interaction_frame.columnconfigure(1, weight=1)
         self.interaction_frame.columnconfigure(2, weight=1)
-
-        self.text_display = self.ax_pressure_time.text(1.02, 0.6, "", transform=self.ax_pressure_time.transAxes, fontsize=14, color=self.clr_text, verticalalignment="top")
-        self.text_display2 = self.ax_pressure_time.text(1.02, 0.4, "", transform=self.ax_pressure_time.transAxes, fontsize=10, color=self.clr_text, verticalalignment="top")
         
         dark_mode_frame = ttk.Frame(self.interaction_frame)
         dark_mode_frame.grid(row=0, column=0, sticky='NW')
@@ -187,10 +185,10 @@ class ODEGuiApp:
         param_frame = ttk.Frame(self.interaction_frame)
         param_frame.grid(row=2, column=0, sticky='N')
         self.sliders = {}
-        self.sliders['SVR'] = self.add_slider(param_frame, "SVR", 0.5, 2.0, self.dict['SVR'], self.update_svr)
-        self.sliders['F_ecmo'] = self.add_slider(param_frame, "ECMO flow", 0, 5000, self.dict['F_ecmo'], self.update_flow)
-        self.sliders['contractility'] = self.add_slider(param_frame, "Contractility", 0.1, 2.0, self.dict['contractility'], self.update_contractility)
+        self.sliders['contractility'] = self.add_slider(param_frame, "Contractility", 10, 100, self.dict['contractility']*100, self.update_contractility)
         self.sliders['compliance'] = self.add_slider(param_frame, "Compliance", 0.5, 2.0, self.dict['compliance'], self.update_compliance)
+        self.sliders['RPM'] = self.add_slider(param_frame, "ECMO rpm", 0, 5000, self.dict['RPM'], self.update_flow)
+        self.sliders['SVR'] = self.add_slider(param_frame, "SVR", 0.5, 2.0, self.dict['SVR'], self.update_svr)
         self.sliders['HR'] = self.add_slider(param_frame, "Heart rate", 40, 120, self.dict['HR'], self.update_hr)
         
         self.fluid_button_500 =ttk.Button(param_frame, text="Give 500ml fluids", command=lambda: self.update_fluid(500))
@@ -209,7 +207,7 @@ class ODEGuiApp:
         self.preset_menu.pack(side=tk.TOP, pady=10)
 
         PV_controls_frame = ttk.Frame(self.interaction_frame)
-        PV_controls_frame.grid(row=1, column=2, sticky='N')
+        PV_controls_frame.grid(row=0, column=2, sticky='N')
         self.esvpr_ea_button = ttk.Button(PV_controls_frame, text="display ESVPR and EA", command=self.toggle_esvpr_ea)
         self.esvpr_ea_button.pack(side=tk.TOP, pady=10)
 
@@ -223,7 +221,7 @@ class ODEGuiApp:
         self.empty_label.pack(side=tk.TOP, padx=10)
 
     def init_model(self):
-        self.dict = {'F_ecmo': 0, 
+        self.dict = {'RPM': 0, 
                      'contractility': 1, 
                      'SVR': 1, 
                      'compliance': 1, 
@@ -236,11 +234,12 @@ class ODEGuiApp:
         global CM
         CM = CardiovascularModel(self.dt)
 
-        self.TBV = 5000
-        self.current_state = np.zeros(13)
+        self.TBV = 5700
+        self.current_state = np.zeros(14)
         self.current_state[:10] = self.TBV * (CM.uvolume / np.sum(CM.uvolume))
         self.current_state[10] = 85
         self.HR = self.dict['HR']
+        self.F_ecmo = np.zeros(int(1/self.dt)).tolist()
 
         self.ao_pressures, self.time_values = [], []
         self.lv_pressures, self.lv_volumes =  [], []
@@ -299,8 +298,12 @@ class ODEGuiApp:
         self.saved_line_esvpr, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:green', alpha=0.4)
         self.saved_line_ea, = self.ax_pressure_volume.plot([], [], lw=2, color='tab:orange', alpha=0.4)
 
+        # Text display
+        self.text_display = self.ax_pressure_time.text(1.02, 0.6, "", transform=self.ax_pressure_time.transAxes, fontsize=14, color=self.clr_text, verticalalignment="top")
+        self.text_display2 = self.ax_pressure_time.text(1.02, 0.4, "", transform=self.ax_pressure_time.transAxes, fontsize=12, color=self.clr_text, verticalalignment="top")
+
         # Stabalizing overlay
-        self.overlay = self.ax_pressure_time.axhspan(0, 300, color='gray', alpha=0.4, zorder=5)
+        self.overlay = self.ax_pressure_time.axhspan(0, 500, color='gray', alpha=0.4, zorder=5)
         self.text = self.ax_pressure_time.text(0.5, 0.5, "Stabilizing...", color='white', fontsize=16, ha='center', va='center', 
                                           transform=self.ax_pressure_time.transAxes, zorder=6)
         self.overlay.set_visible(False)
@@ -321,18 +324,19 @@ class ODEGuiApp:
         ttk.Label(frame, text=f"{label}:").pack(side=tk.LEFT, padx=5)
         
         var = tk.DoubleVar(value=var)
-        slider = ttk.Scale(frame, from_=min_val, to=max_val, variable=var, command=command, orient="horizontal", length=200)
+        slider = ttk.Scale(frame, from_=min_val, to=max_val, variable=var, 
+                           command=command, orient="horizontal", length=300)
         slider.pack(side=tk.LEFT)
 
         # Store label for updating
         if label == "SVR":
             self.svr_label = ttk.Label(frame, text=f"{var.get():.1f}")
             self.svr_label.pack(side=tk.LEFT, padx=5)
-        elif label == "ECMO flow":
+        elif label == "ECMO rpm":
             self.flow_label = ttk.Label(frame, text=f"{var.get():.0f} RPM")        #L/min
             self.flow_label.pack(side=tk.LEFT, padx=5)
         elif label == "Contractility":
-            self.contractility_label = ttk.Label(frame, text=f"{100*var.get():.0f}%")
+            self.contractility_label = ttk.Label(frame, text=f"{var.get():.0f}%")
             self.contractility_label.pack(side=tk.LEFT, padx=5)
         elif label == "Compliance":
             self.compliance_label = ttk.Label(frame, text=f"{var.get():.1f}")
@@ -351,15 +355,15 @@ class ODEGuiApp:
         self.par_adjusted = True 
     
     def update_flow(self, value):
-        self.dict['F_ecmo'] = float(value)
+        self.dict['RPM'] = float(value)
         self.flow_label.config(text=f"{float(value):.0f} RPM")     #L/min
 
         self.par_adjusted = True 
     
     def update_contractility(self, value):
-        self.dict['contractility'] = float(value)
+        self.dict['contractility'] = float(value)/100
         self.adj_elastance = CM.adjust_elastance(self.dict['contractility'], self.dict['compliance'])
-        self.contractility_label.config(text=f"{100*float(value):.0f} %")
+        self.contractility_label.config(text=f"{float(value):.0f} %")
 
         self.par_adjusted = True   
     
@@ -404,7 +408,7 @@ class ODEGuiApp:
         else:
             self.dict['ventilation'] = True
             self.vent_button.config(text="Ventilation ON", bg='chartreuse3')
-            self.stab_thres = 8
+            self.stab_thres = 10
 
         self.par_adjusted = True
         
@@ -535,9 +539,9 @@ class ODEGuiApp:
         self.text_display2.set_text(
             f"PP: {pp:.0f} mmHg\n"
             f"CO: {self.cardiac_output:.1f} L/min\n"
-            f"TBV: {self.TBV:.0f} ml\n"
             f"HR: {self.HR:.0f} bpm\n"
-            f"ECMO flow: {self.F_ecmo:.1f} L/min")
+            f"ECMO flow: {np.mean(self.F_ecmo):.1f} L/min\n"
+            f"TBV: {self.TBV:.0f} ml\n")
 
         self.min_val = min(self.ao_pressures[-1]-10, self.min_val)
         self.max_val = max(self.ao_pressures[-1]+10, self.max_val)
@@ -613,18 +617,19 @@ class ODEGuiApp:
 
             import_dict = CM.export_function()
             self.HR = import_dict['HR']
-            elv = import_dict['elv']
-            lv_pressure = import_dict['Plv']
-            ao_pressure = import_dict['Pao']
-            la_pressure = import_dict['Pla']
+            P_intra = import_dict['P_intra']
+            P = import_dict['P']
+            lv_pressure = P[9]
+            ao_pressure = P[0]
+            la_pressure = P[8]
+            P_ea = P[1]
+            P_cv = P[3]
 
             solution = solve_ode(t_span, self.current_state, self.dict)
             lv_volume = solution.y[9,-1]
             
-            P_pa = self.adj_elastance[0,1]*(solution.y[1,-1] - CM.uvolume[1])
-            P_cv = self.adj_elastance[0,3]*(solution.y[3,-1] - CM.uvolume[3])
-            self.F_ecmo = CM.calc_ecmo_flow(self.dict['F_ecmo'], P_cv, P_pa)
-            self.F_ecmo = self.F_ecmo*60/1000  # Convert to L/min
+            self.F_ecmo.append(CM.calc_ecmo_flow(self.dict['RPM'], P_cv, P_ea)*60/1000)
+            self.F_ecmo.pop(0)
                 
             # Store values
             self.ao_pressures.append(ao_pressure)

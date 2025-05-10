@@ -1,8 +1,7 @@
 import numpy as np
-#from baroreceptor_sim import baroreceptor_control
 
 class CardiovascularModel:
-    def __init__(self, dt = 0.01):
+    def __init__(self, dt = 0.01, real_time = True):
 
         self.dt = dt
 
@@ -11,45 +10,44 @@ class CardiovascularModel:
         self.resistance = np.zeros(10)
         self.uvolume = np.zeros(10)
 
-        # Initialize model parameters
-        self.elastance[:, 0] = [1.43, np.nan]      # Intra-thoracic arteries
-        self.elastance[:, 1] = [0.8, np.nan]       # Extra-thoracic arteries
-        self.elastance[:, 2] = [0.0169, np.nan]    # Extra-thoracic veins
-        self.elastance[:, 3] = [0.0082, np.nan]    # Intra-thoracic veins
-        self.elastance[:, 4] = [0.05, 0.12]        # Right atrium (min, max)
-        self.elastance[:, 5] = [0.057, 0.40]       # Right ventricle (min, max)
-        self.elastance[:, 6] = [0.233, np.nan]     # Pulmonary arteries
-        self.elastance[:, 7] = [0.0455, np.nan]    # Pulmonary veins
-        self.elastance[:, 8] = [0.12, 0.4]        # Left atrium (min, max)
+        self.elastance[:, 0] = [2.3, np.nan]      # Intra-thoracic arteries
+        self.elastance[:, 1] = [1.1, np.nan]       # Extra-thoracic arteries
+        self.elastance[:, 2] = [0.01, np.nan]    # Extra-thoracic veins
+        self.elastance[:, 3] = [0.03, np.nan]    # Intra-thoracic veins
+        self.elastance[:, 4] = [0.04, 0.15]        # Right atrium (min, max)
+        self.elastance[:, 5] = [0.04, 0.60]       # Right ventricle (min, max)
+        self.elastance[:, 6] = [0.23, np.nan]     # Pulmonary arteries
+        self.elastance[:, 7] = [0.12, np.nan]    # Pulmonary veins
+        self.elastance[:, 8] = [0.08, 0.17]        # Left atrium (min, max)
         self.elastance[:, 9] = [0.08, 3]           # Left ventricle (min, max)
 
         self.resistance = np.array([
-            0.2,   # Intra-thoracic arteries
-            0.5,   # Extra-thoracic arteries
-            0.09,   # Extra-thoracic veins
-            0.03,  # Intra-thoracic veins
+            0.18,   # Intra-thoracic arteries
+            0.8,   # Extra-thoracic arteries
+            0.06,   # Extra-thoracic veins
+            0.012,  # Intra-thoracic veins
             0.003,  # Right atrium
-            0.003,  # Right ventricle
-            0.11,   # Pulmonary arteries
-            0.003,  # Pulmonary veins
+            0.003,  # Right ventricles
+            0.08,   # Pulmonary arteries
+            0.01,  # Pulmonary veins
             0.003,  # Left atrium
-            0.008,  # Left ventricle
+            0.006,  # Left ventricle
         ])
 
         self.uvolume = np.array([
-            140,   # Intra-thoracic arteries
-            370,   # Extra-thoracic arteries
-            1000,  # Extra-thoracic veins
-            1190,  # Intra-thoracic veins
-            14,    # Right atrium
-            26,    # Right ventricle
-            50,    # Pulmonary arteries
-            350,   # Pulmonary veins
-            11,    # Left atrium
-            20,    # Left ventricle
+            250,   # Intra-thoracic arteries
+            500,   # Extra-thoracic arteries
+            1450,  # Extra-thoracic veins
+            1335,  # Intra-thoracic veins
+            10,    # Right atrium
+            50,    # Right ventricle
+            90,    # Pulmonary arteries
+            490,   # Pulmonary veins
+            10,    # Left atrium
+            50,    # Left ventricle
         ])
 
-        self.R_ecmo = 2 # Resistance of the ECMO circuit
+        self.R_ecmo = 3.2 # Resistance of the ECMO circuit
         
         self.dose = 0
         self.dose_adm = 0
@@ -57,16 +55,22 @@ class CardiovascularModel:
 
         self.HR_c = 70
         self.P_set = 85
+        self.G = [-0.13, 0.09, 0.45]
 
         # Export variables
-        self.P_intra = 0
-        self.elv = 0
-        self.Plv = 0
-        self.Pao = 0
-        self.Pla = 0
+        if real_time:
+            self.P_intra = 0
+            self.elv = 0
+            self.P = np.zeros(10)
+            self.real_time = True
+        else:
+            self.P_intra = []
+            self.elv = []
+            self.P = []
+            self.real_time = False
         
         self.Fes_delayed = np.full(int(2/self.dt), 2.66).tolist()
-        self.Fev_delayed = np.zeros(int(0.2/self.dt)).tolist() #np.full(int(0.2/self.dt), 4.66).tolist()
+        self.Fev_delayed = np.zeros(int(0.2/self.dt)).tolist()
 
         self.t0 = 0
         self.t0_resp = 0
@@ -156,6 +160,7 @@ class CardiovascularModel:
         return ela, elv, era, erv
 
     def cardiac_contraction_DH(self, t, HR, adj_elastance):
+        # Cardiac contraction using the double hill model. Parameter values based on DOI: 10.1002/cnm.1466
         
         phi = self.cardiac_phase(t, HR)
 
@@ -172,66 +177,76 @@ class CardiovascularModel:
             t = phi - onset[i] if phi - onset[i] > 0 else 0
             g1, g2 = ((t)/tau1[i])**m1[i], ((t)/tau2[i])**m2[i]
             
-            a = 1.516 # Derived from the double hill curve to ensure E goes to Emax
+            a = 1.516       # Normalization constant derived from the double hill curve to ensure E goes to Emax
             E[i] = Emax*a*(g1/(1+g1) * 1/(1+g2)) + Emin
         
         return E
 
-    def baroreceptor_control(self, P, dVdt, elastance, P_set, Pbaro, dHRv, dHRh):
-        # Baroreceptor control
-        tz = 6.37
-        tp = 20.76 #2.076
+    def baroreceptor_control(self, P, dVdt, elastance, P_set, X):
+        # Baroreceptor control. Values are taken from the paper of Ursino (1998) DOI: 10.1152/ajpheart.1998.275.5.H1733
+
+        Pbaro, dHRv, dHRs, dRs = X[0], X[1], X[2], X[3]
+
+        tz = 6.37                   # Time constant
+        tp = 20.76 #2.076           # Time constant
         
-        Fas_min = 2.52
-        Fas_max = 47.87
-        Ka = 11.758
+        Fas_min = 2.52              # Minimum firing rate afferent pathway
+        Fas_max = 47.87             # Maximum firing rate afferent pathway
+        Ka = 11.758                 # Slope of the sigmoid function
+
+        Fes_inf = 2.10              # Firing rate efferent pathway (inf)
+        Fes_0 = 16.11               # Firing rate efferent pathway (0)
+        Kes = 0.0675                # Slope of the sigmoid function
+        Fev_0 = 3.2                 # Firing rate efferent vagal pathway (0)
+        Fev_inf = 6.3               # Firing rate efferent vagal pathway (inf)
+        Kev = 7.06                  # Slope of the sigmoid function
+        Fas_0 = 25  
+
+        Ghs = self.G[0]              # Baroreceptor gain heart rate
+        Ths = 2.0                   # Time constant for the sympathetic heart rate response to baroreceptor stimulation
+        Gv = self.G[1]              # Baroreceptor gain heart rate vagal
+        Thv = 1.5                   # Time constant for the vagal heart rate response to baroreceptor stimulation
+        Grs = self.G[2]              # Baroreceptor gain resistance
+        Trs = 6                     # Time constant for the resistance response to baroreceptor stimulation
 
         # Measured pressure and afferent pathway
         dPbarodt = (P + tz*(dVdt*elastance) - Pbaro) / tp
         Fas = (Fas_min + Fas_max*np.exp((Pbaro - P_set)/Ka)) / (1 + np.exp((Pbaro - P_set)/Ka))
 
-        Fes_inf = 2.10
-        Fes_0 = 16.11
-        Kes = 0.0675
-        Fev_0 = 3.2
-        Fev_inf = 6.3
-        Kev = 7.06 
-        Fas_0 = 25
-
         # Efferent pathway
         Fes = Fes_inf + (Fes_0 - Fes_inf) * np.exp(-Kes*Fas)
         Fev = (Fev_0 + Fev_inf*np.exp((Fas-Fas_0)/Kev)) / (1 + np.exp((Fas-Fas_0)/Kev))
 
-        self.Fes_delayed.append(max(Fes, 2.66))
+        self.Fes_delayed.append(max(Fes, 2.66))         # Append to list in order to provide time delay
         self.Fev_delayed.append(Fev)
 
-        Gh = -0.13     # Heart rate
-        Ths = 2.0        #2.0
-
-        Gv = 0.09
-        Thv = 1.5        #1.5
-
-        sFh = Gh * (np.log(self.Fes_delayed[-int(2/self.dt)]-2.65+1)-1.1)
+        sFh = Ghs * (np.log(self.Fes_delayed[-int(2/self.dt)]-2.65+1)-1.1)
         sFv = Gv * (self.Fev_delayed[-int(0.2/self.dt)]-4.66)
+        sFr = Grs * (np.log(self.Fes_delayed[-int(2/self.dt)]-2.65+1)-1.1)
 
+        # Change in heart rate
         ddHRv = (sFv - dHRv)/Thv
-        ddHRh = (sFh - dHRh)/Ths
+        ddHRs = (sFh - dHRs)/Ths
+        ddRs =  (sFr - dRs)/Trs
 
-        return dPbarodt, ddHRv, ddHRh
+        return dPbarodt, ddHRv, ddHRs, ddRs
     
     def calc_ecmo_flow(self, RPM, P_pre, P_after):
-        
-        PFc = 300*np.exp(0.002*RPM)/(300+np.exp(0.002*RPM))                      
+        # Parameter values based on clinical experience
+        P_max = 600
+        dp = 0.0008
+
+        PFc = (P_max / (1 + np.exp(-dp * RPM))) - P_max / 2
         F_ecmo = (P_pre + PFc - P_after) / self.R_ecmo if P_pre + PFc - P_after > 0 else 0
 
         return F_ecmo
     
-    def mechanical_ventilation(self, t, RR = 20, PEEP = 5, P_vent = 8, I_E_ratio = 2):
-        PEEP, P_vent = PEEP*0.73556, P_vent*0.73556 
+    def mechanical_ventilation(self, t, RR = 20, PEEP = 5, P_vent = 6, I_E_ratio = 2):
+        PEEP, P_vent = PEEP*0.73556, P_vent*0.73556         # Convert to mmHg
 
         tau = self.resp_phase(t, RR)
         resp_cycle = 60/RR
-        RC = 0.1
+        RC = 0.3
 
         t_insp = resp_cycle/(1+I_E_ratio) # Inspiratory time
 
@@ -248,16 +263,14 @@ class CardiovascularModel:
             'HR': self.HR_c,
             'P_intra': self.P_intra,
             'elv': self.elv,
-            'Plv': self.Plv,
-            'Pao': self.Pao,
-            'Pla': self.Pla}
+            'P': self.P,}
         
         return export_dict
 
     def ext_st_sp_eq(self, t, x, **kwargs):
 
         # Split kwargs
-        RPM             =       kwargs.get('F_ecmo', 0)               #* 1000/60
+        RPM             =       kwargs.get('RPM', 0)  
         contractility   =       kwargs.get('contractility', 1)
         fSVR            =       kwargs.get('SVR', 1)
         fcompl          =       kwargs.get('compliance', 1)
@@ -270,18 +283,16 @@ class CardiovascularModel:
 
         # Split state vector
         V = x[:10]
-        Pbaro = x[10] 
-        DHRv = x[11] 
-        DHRh = x[12]
+        X_baro = x[10:] 
 
         self.P_intra = self.mechanical_ventilation(t) if ventilation == True else 0
 
-        self.HP = 60 / HR + DHRv + DHRh if baro_recept == True else 60 / HR
-        R_c = fSVR #+ DR
+        self.HP = 60 / HR + X_baro[1] + X_baro[2] if baro_recept == True else 60 / HR
+        self.dR = X_baro[3] if baro_recept == True else 0
 
         # Calculate variables
         adj_elastance = self.adjust_elastance(contractility, fcompl)
-        ela, elv, era, erv = self.cardiac_contraction(t, HR, adj_elastance)
+        ela, elv, era, erv = self.cardiac_contraction_DH(t, HR, adj_elastance)
         self._apply_fluids(t, fluids)
 
         if self.dose_adm < self.fluids:
@@ -306,14 +317,14 @@ class CardiovascularModel:
 
         # Calculate flows
         F = np.zeros(10)
-        F[0] = (P[0] - P[1]) / (self.resistance[0] * R_c)          
-        F[1] = (P[1] - P[2]) / (self.resistance[1] * R_c)
-        F[2] = (P[2] - P[3]) / (self.resistance[2] * R_c)
-        F[3] = (P[3] - P[4]) / self.resistance[3] if P[3] - P[4] > 0 else (P[3] - P[4]) / (10 * self.resistance[3])
+        F[0] = (P[0] - P[1]) / (self.resistance[0] * fSVR)          
+        F[1] = (P[1] - P[2]) / (self.resistance[1] * fSVR + self.dR)
+        F[2] = (P[2] - P[3]) / (self.resistance[2] * fSVR) #if P[2] - P[3] > 0 else (P[2] - P[3]) / (10 * self.resistance[2])
+        F[3] = (P[3] - P[4]) / self.resistance[3] #if P[3] - P[4] > 0 else (P[3] - P[4]) / (10 * self.resistance[3])
         F[4] = max((P[4] - P[5]) / self.resistance[4], 0)
         F[5] = max((P[5] - P[6]) / self.resistance[5], 0)
-        F[6] = (P[6] - P[7]) / self.resistance[6]
-        F[7] = (P[7] - P[8]) / self.resistance[7] if P[7] - P[8] > 0 else (P[7] - P[8]) / (10 * self.resistance[7])
+        F[6] = (P[6] - P[7]) / (self.resistance[6] * fSVR)
+        F[7] = (P[7] - P[8]) / self.resistance[7] #if P[7] - P[8] > 0 else (P[7] - P[8]) / (10 * self.resistance[7])
         F[8] = max((P[8] - P[9]) / self.resistance[8], 0)
         F[9] = max((P[9] - P[0]) / self.resistance[9], 0)   
 
@@ -333,9 +344,9 @@ class CardiovascularModel:
         dVdt[9] = F[8] - F[9]
 
         if baro_recept == True:
-            dBarodt = self.baroreceptor_control(P[0], dVdt[0], adj_elastance[0,0], P_set, Pbaro, DHRv, DHRh)
+            dBarodt = self.baroreceptor_control(P[0], dVdt[0], adj_elastance[0,0], P_set, X_baro)
         else:
-            dBarodt = 0, 0, 0
+            dBarodt = 0, 0, 0, 0
 
         # Combine all derivatives
         dxdt = np.zeros(len(dVdt) + len(dBarodt))
@@ -343,10 +354,12 @@ class CardiovascularModel:
         dxdt[len(dVdt):] = dBarodt
 
         # Export variables
-        self.elv = elv
-        self.Plv = P[9]
-        self.Pao = P[0]
-        self.Pla = P[8]
+        if self.real_time:
+            self.elv = elv
+            self.P = P
+        else:
+            self.elv.append(elv)
+            self.P.append((t, P))
 
         return dxdt
 
