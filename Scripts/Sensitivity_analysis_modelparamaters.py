@@ -7,6 +7,7 @@ from cardiovascular_model_2 import CardiovascularModel
 
 import multiprocessing as mp
 from functools import partial
+from scipy.interpolate import interp1d
 
 # Initialize the model to access its parameters
 
@@ -49,54 +50,67 @@ def define_parameters(CM):
         'V0_pv': CM.uvolume[7],              # Pulmonary veins
         'V0_la': CM.uvolume[8],              # Left atrium
         'V0_lv': CM.uvolume[9],              # Left ventricle
+
+        'G_baro': CM.G,                     # Baroreceptor gain
+        'TBV': 5700,                      # Total blood volume
     }
     return parameters
 
 def solve_ode(parameters, key, base_val, scale, user_dict, dt):
     
-    CM_solve = CardiovascularModel()
+    CM_solve = CardiovascularModel(real_time=False)
+    TBV = 5700
+
+    t_span=(0.0, 20.0)
+    t_eval = np.arange(t_span[0], t_span[1] + dt, dt) 
+
 
     if key.startswith('C_'):
         indx = list(parameters.keys()).index(key)
-        CM_solve.elastance[0, indx] = base_val*scale
+        CM_solve.elastance[0, indx] = base_val*(1/scale)
     if key.startswith('R_'):
         indx = list(parameters.keys()).index(key) - 10
         CM_solve.resistance[indx] = base_val*scale
     if key.startswith('V0_'):
         indx = list(parameters.keys()).index(key) - 20
+        TBV = TBV - (CM_solve.uvolume[indx] - base_val*scale)
         CM_solve.uvolume[indx] = base_val*scale
+    if key.startswith('G_'): 
+        CM_solve.G = np.array(base_val)*scale
+        user_dict['baroreceptor'] = True
+        user_dict['contractility'] = 0.5
+        t_span = (0.0, 40)
+        t_eval = np.arange(t_span[0], t_span[1] + dt, dt)
+    if key.startswith('TBV'):
+        TBV = base_val*scale 
 
-
-    t_span=(0.0, 20.0)
-    t_eval = np.arange(t_span[0], t_span[1] + dt, dt) 
-
-    X = np.zeros(13)
-    X[:10] = 5000 * (CM_solve.uvolume / np.sum(CM_solve.uvolume))
+    X = np.zeros(14)
+    X[:10] = TBV * (CM_solve.uvolume / np.sum(CM_solve.uvolume))
 
     sol = solve_ivp(lambda t, x: CM_solve.ext_st_sp_eq(t, x, **user_dict),
-                    t_span, X, t_eval=t_eval, method='RK45',
+                    t_span, X, t_eval=t_eval, method='LSODA',
                     rtol=1e-8, atol=1e-8)
 
     return define_output_parameters(user_dict, sol, dt, CM_solve)
 
 
 def define_output_parameters(dict, sol, dt, CM_solve):
-    beats = int(5*(60/dict['HR'])/dt)
+    beats = int(5*(CM_solve.HP)/dt)
     volume = sol.y[0, -beats:]
     pressure = CM_solve.elastance[0,0] * (volume - CM_solve.uvolume[0])
 
     sbp, dbp, map, pp = calc_pressures(pressure)
-    max_lv_volume, min_lv_volume, max_lv_pressure, min_lv_pressure, max_pa_pressure, min_pa_pressure, max_pv_pressure, min_pv_pressure = calc_output(sol.y, beats, CM_solve)
+    max_lv_volume, min_lv_volume, max_lv_pressure, min_lv_pressure, max_pa_pressure, min_pa_pressure, max_cv_pressure, min_cv_pressure = calc_output(sol, beats, CM_solve)
     CO = calc_co(volume, dict['HR'])
 
-    return max_lv_volume, min_lv_volume, max_lv_pressure, min_lv_pressure, max_pa_pressure, min_pa_pressure, max_pv_pressure, min_pv_pressure, CO
+    return max_lv_volume, min_lv_volume, max_lv_pressure, sbp, dbp, map, pp, max_cv_pressure, min_cv_pressure, CO
 
 
 def simulate_apw(user_dict, dt=0.005):
 
-    CM = CardiovascularModel()
+    CM = CardiovascularModel(real_time=False)
     parameters = define_parameters(CM)
-    scales = np.arange(0.25, 2, 0.25)
+    scales = np.array([0.5, 0.75, 1, 1.5, 2])
 
     dict_out = {}
     
@@ -112,17 +126,18 @@ def simulate_apw(user_dict, dt=0.005):
 
                 results = pool.map(partial_func, scales)
 
-                max_lv_volume, min_lv_volume, max_lv_pressure, min_lv_pressure, max_pa_pressure, min_pa_pressure, max_pv_pressure, min_pv_pressure, CO = zip(*results)
+                max_lv_volume, min_lv_volume, max_lv_pressure, sbp, dbp, map, pp, max_cv_pressure, min_cv_pressure, CO = zip(*results)
 
                 dict_out[key] = {
                     'max_lv_volume': max_lv_volume,
                     'min_lv_volume': min_lv_volume,
                     'max_lv_pressure': max_lv_pressure,
-                    'min_lv_pressure': min_lv_pressure,
-                    'max_pa_pressure': max_pa_pressure,
-                    'min_pa_pressure': min_pa_pressure,
-                    'max_pv_pressure': max_pv_pressure,
-                    'min_pv_pressure': min_pv_pressure,
+                    'sbp': sbp,
+                    'dbp': dbp,
+                    'map': map,
+                    'pp': pp,
+                    'max_cv_pressure': max_cv_pressure,
+                    'min_cv_pressure': min_cv_pressure,
                     'CO': CO}
 
     except KeyboardInterrupt:
@@ -134,22 +149,27 @@ def simulate_apw(user_dict, dt=0.005):
 
 def calc_output(sol, beats, CM_solve):
 
-    max_lv_volume = max(sol[9, -beats:])
-    min_lv_volume = min(sol[9, -beats:])
-    max_lv_pressure = max(sol[9, -beats:]*CM_solve.elastance[0, 9])
-    min_lv_pressure = min(sol[9, -beats:]*CM_solve.elastance[0, 9])
-    max_pa_pressure = max(sol[0, -beats:]*CM_solve.elastance[0, 0])
-    min_pa_pressure = min(sol[0, -beats:]*CM_solve.elastance[0, 0])
-    max_pv_pressure = max(sol[3, -beats:]*CM_solve.elastance[0, 3])
-    min_pv_pressure = min(sol[3, -beats:]*CM_solve.elastance[0, 3])
+    t_model, P = zip(*CM_solve.P)
+    P_model = np.array(P).T
 
-    return max_lv_volume, min_lv_volume, max_lv_pressure, min_lv_pressure, max_pa_pressure, min_pa_pressure, max_pv_pressure, min_pv_pressure
+    P = np.zeros((len(P_model), len(sol.t)))
+    for i,x in enumerate(P_model):
+        interp_func = interp1d(t_model, x, kind='linear', fill_value='extrapolate')
+        P[i] = interp_func(sol.t)
+
+    max_lv_volume = max(sol.y[9, -beats:])
+    min_lv_volume = min(sol.y[9, -beats:])
+    max_lv_pressure = max(P[9, -beats:])
+    min_lv_pressure = min(P[9, -beats:])
+    max_pa_pressure = max(P[6, -beats:])
+    min_pa_pressure = min(P[6, -beats:])
+    max_cv_pressure = max(P[3, -beats:])
+    min_cv_pressure = min(P[3, -beats:])
+
+    return max_lv_volume, min_lv_volume, max_lv_pressure, min_lv_pressure, max_pa_pressure, min_pa_pressure, max_cv_pressure, min_cv_pressure
 
 
 def calc_pressures(pressure):
-
-    if len(pressure) < 2:
-        return 0,0,0,0
     
     pressure_array = np.array(pressure)
     dPP = np.diff(pressure_array)
@@ -186,13 +206,14 @@ def calc_co(volumes, HR):
 
 if __name__ == "__main__":
     input_dict = {
-        'F_ecmo': 0,
+        'RPM': 0,
         'contractility': 1,
         'SVR': 1,
         'compliance': 1,
         'fluids': 0,
         'HR': 70,
-        'P_set': 85
+        'P_set': 85,
+        'baroreceptor': False
     }
 
     results = simulate_apw(input_dict)
@@ -200,24 +221,26 @@ if __name__ == "__main__":
     flattened_results = []
 
     for key, metrics in results.items():
-        for scale_idx, scale_value in enumerate(np.arange(0.25, 2, 0.25)):
+        for scale_idx, scale_value in enumerate([0.5, 0.75, 1, 1.5, 2]):
             flattened_results.append({
                 'Parameter': key,
                 'Scale': scale_value,
-                'max_lv_volume': metrics['max_lv_volume'][scale_idx],
-                'min_lv_volume': metrics['min_lv_volume'][scale_idx],
-                'max_lv_pressure': metrics['max_lv_pressure'][scale_idx],
-                'min_lv_pressure': metrics['min_lv_pressure'][scale_idx],
-                'max_pa_pressure': metrics['max_pa_pressure'][scale_idx],
-                'min_pa_pressure': metrics['min_pa_pressure'][scale_idx],
-                'max_pv_pressure': metrics['max_pv_pressure'][scale_idx],
-                'min_pv_pressure': metrics['min_pv_pressure'][scale_idx],
+                'max V_lv': metrics['max_lv_volume'][scale_idx],
+                'min V_lv': metrics['min_lv_volume'][scale_idx],
+                'max P_lv': metrics['max_lv_pressure'][scale_idx],
+                'SBP': metrics['sbp'][scale_idx],
+                'DBP': metrics['dbp'][scale_idx],
+                'MAP': metrics['map'][scale_idx],
+                'PP': metrics['pp'][scale_idx],
+                'max P_cv': metrics['max_cv_pressure'][scale_idx],
+                'min P_cv': metrics['min_cv_pressure'][scale_idx],
                 'CO': metrics['CO'][scale_idx]
             })
 
     # Convert to DataFrame
     df = pd.DataFrame(flattened_results)
 
-    root = r"C:\Users\afennema\OneDrive - UMC Utrecht\Documenten\M3 onderzoek\Computational modelling\Sensitivity_analysis"
-    df.to_excel(fr"{root}\sensitivity_analysis2.xlsx", sheet_name='Sensitivity_analysis', index=False)
-    df.to_csv(fr"{root}\sensitivity_analysis2.csv", index=False)
+    root = r""
+    df.to_excel(fr"{root}\sensitivity_analysis_final.xlsx", sheet_name='Sensitivity_analysis', index=False)
+    df.to_csv(fr"{root}\sensitivity_analysis_final.csv", index=False)
+
