@@ -1,11 +1,16 @@
 import numpy as np
 
 class CardiovascularModel:
+    """
+    A model to simulate cardiovascular dynamics.
+    """
     def __init__(self, dt = 0.01, real_time = True):
 
         self.dt = dt
 
         # Initialize arrays to store model parameters
+        # Values are roughly based on: 37:237–47. doi: 10.1111/j.1525-1594.2012.01540.x,  doi: 10.1152/japplphysiol.00241.2001, doi: 10.1016/j.jbi.2015.07.004
+
         self.elastance = np.zeros((2, 10))
         self.resistance = np.zeros(10)
         self.uvolume = np.zeros(10)
@@ -15,8 +20,8 @@ class CardiovascularModel:
         self.elastance[:, 2] = [0.01, np.nan]    # Extra-thoracic veins
         self.elastance[:, 3] = [0.03, np.nan]    # Intra-thoracic veins
         self.elastance[:, 4] = [0.04, 0.15]        # Right atrium (min, max)
-        self.elastance[:, 5] = [0.04, 0.60]       # Right ventricle (min, max)
-        self.elastance[:, 6] = [0.23, np.nan]     # Pulmonary arteries
+        self.elastance[:, 5] = [0.04, 0.6]       # Right ventricle (min, max)
+        self.elastance[:, 6] = [0.33, np.nan]     # Pulmonary arteries
         self.elastance[:, 7] = [0.12, np.nan]    # Pulmonary veins
         self.elastance[:, 8] = [0.08, 0.17]        # Left atrium (min, max)
         self.elastance[:, 9] = [0.08, 3]           # Left ventricle (min, max)
@@ -49,13 +54,18 @@ class CardiovascularModel:
 
         self.R_ecmo = 3.2 # Resistance of the ECMO circuit
         
+        # Fluid administration parameters
         self.dose = 0
         self.dose_adm = 0
         self.fluids = 0
 
+        # Baroreceptor parameters
         self.HR_c = 70
         self.P_set = 85
         self.G = [-0.13, 0.09, 0.45]
+
+        self.Fes_delayed = np.full(int(2/self.dt), 2.66).tolist()
+        self.Fev_delayed = np.zeros(int(0.2/self.dt)).tolist()
 
         # Export variables
         if real_time:
@@ -69,20 +79,23 @@ class CardiovascularModel:
             self.P = []
             self.real_time = False
         
-        self.Fes_delayed = np.full(int(2/self.dt), 2.66).tolist()
-        self.Fev_delayed = np.zeros(int(0.2/self.dt)).tolist()
-
         self.t0 = 0
         self.t0_resp = 0
 
-    def _apply_fluids(self, t, fluids):
+    def _apply_fluids(self, fluids):
+        """
+        This function controls the speed of fluid administration.
+        """
         
         if fluids != 0 and self.fluids == 0:
             self.fluids = fluids
             self.dose_adm = 0
-            self.dose = (fluids/50)*self.dt             # Administration speed has to be updated sometime to match timestep of the simulation
-            
+            self.dose = (fluids/50)*self.dt             # TODO: timestep should be equal to real-time step and not constant for RK45
+
     def adjust_elastance(self, contractility, fcompl):
+        """
+        Adjust the elastance matrix based on contractility and compliance.
+        """
 
         adj_elastance = self.elastance.copy()
         adj_elastance[1, 4] *= contractility
@@ -100,6 +113,10 @@ class CardiovascularModel:
         return adj_elastance
     
     def cardiac_phase(self, t, HR):
+        """
+        Calculate the current point in cardiac cycle. This method is needed due to the fact that heart rate is adjusted under 
+        baroreceptor control
+        """
             
         t_end = self.t0 + 60/self.HR_c
         phi = t - self.t0
@@ -112,6 +129,9 @@ class CardiovascularModel:
         return phi
     
     def resp_phase(self, t, RR):
+        """
+        Calculate the current point in the respiratory cycle.
+        """
         t_end = self.t0_resp + 60/RR
         tau = t - self.t0_resp
 
@@ -121,47 +141,11 @@ class CardiovascularModel:
 
         return tau
 
-    def cardiac_contraction(self, t, HR, adj_elastance):
-        
-        phi = self.cardiac_phase(t, HR)
-
-        HP = 60/self.HR_c
-        Tas = 0.03 + 0.09 * HP
-        Tav = 0.01
-        Tvs = 0.16 + 0.2 * HP
-        Tvs1 = 0.75*Tvs
-        Tvs2 = 0.25*Tvs
-        T = self.dt 
-        
-        ncc = (phi / HP) / T
-
-        #ncc = (t % HP) / T
-        
-        if ncc <= round(Tas / T):
-            aaf = np.sin(np.pi * ncc / (Tas / T))
-        else:
-            aaf = 0
-
-        ela = adj_elastance[0, 8] + (adj_elastance[1, 8] - adj_elastance[0, 8]) * aaf
-        era = adj_elastance[0, 4] + (adj_elastance[1, 4] - adj_elastance[0, 4]) * aaf
-
-        if ncc <= round((Tas + Tav) / T):
-            vaf = 0
-        elif ncc <= round((Tas + Tav + Tvs1) / T):
-            vaf = 1 - np.cos(np.pi * (ncc-(Tas + Tav) / T) / (Tvs1 / T))
-        elif ncc <= round((Tas + Tav + Tvs) / T):
-            vaf = 1 + np.cos(np.pi * (ncc-(Tas + Tav + Tvs1) / T) / ((Tvs2) / T))
-        else:  
-            vaf = 0
-
-        elv = adj_elastance[0, 9] + (adj_elastance[1, 9] - adj_elastance[0, 9]) * vaf
-        erv = adj_elastance[0, 5] + (adj_elastance[1, 5] - adj_elastance[0, 5]) * vaf
-
-        return ela, elv, era, erv
-
     def cardiac_contraction_DH(self, t, HR, adj_elastance):
-        # Cardiac contraction using the double hill model. Parameter values based on DOI: 10.1002/cnm.1466
-        
+        """
+        Cardiac contraction using the double hill model. Parameter values based on DOI: 10.1002/cnm.1466
+        """
+
         phi = self.cardiac_phase(t, HR)
 
         HP = 60/self.HR_c
@@ -183,7 +167,9 @@ class CardiovascularModel:
         return E
 
     def baroreceptor_control(self, P, dVdt, elastance, P_set, X):
-        # Baroreceptor control. Values are taken from the paper of Ursino (1998) DOI: 10.1152/ajpheart.1998.275.5.H1733
+        """
+        Baroreceptor control. Values are taken from the paper of Ursino (1998) DOI: 10.1152/ajpheart.1998.275.5.H1733
+        """
 
         Pbaro, dHRv, dHRs, dRs = X[0], X[1], X[2], X[3]
 
@@ -232,6 +218,10 @@ class CardiovascularModel:
         return dPbarodt, ddHRv, ddHRs, ddRs
     
     def calc_ecmo_flow(self, RPM, P_pre, P_after):
+        """
+        Calculate the ECMO flow based on RPM and pressures.
+        """
+
         # Parameter values based on clinical experience
         P_max = 600
         dp = 0.0008
@@ -242,6 +232,10 @@ class CardiovascularModel:
         return F_ecmo
     
     def mechanical_ventilation(self, t, RR = 20, PEEP = 5, P_vent = 6, I_E_ratio = 2):
+        """
+        This function calculates the intra-thoracic pressure during mechanical ventilation.
+        """
+
         PEEP, P_vent = PEEP*0.73556, P_vent*0.73556         # Convert to mmHg
 
         tau = self.resp_phase(t, RR)
@@ -257,15 +251,6 @@ class CardiovascularModel:
 
         return P_intra
 
-    def export_function(self):
-        # Return parameters for GUI
-        export_dict = {
-            'HR': self.HR_c,
-            'P_intra': self.P_intra,
-            'elv': self.elv,
-            'P': self.P,}
-        
-        return export_dict
 
     def ext_st_sp_eq(self, t, x, **kwargs):
 
@@ -293,7 +278,7 @@ class CardiovascularModel:
         # Calculate variables
         adj_elastance = self.adjust_elastance(contractility, fcompl)
         ela, elv, era, erv = self.cardiac_contraction_DH(t, HR, adj_elastance)
-        self._apply_fluids(t, fluids)
+        self._apply_fluids(fluids)
 
         if self.dose_adm < self.fluids:
             V[1] += self.dose
@@ -323,7 +308,7 @@ class CardiovascularModel:
         F[3] = (P[3] - P[4]) / self.resistance[3] #if P[3] - P[4] > 0 else (P[3] - P[4]) / (10 * self.resistance[3])
         F[4] = max((P[4] - P[5]) / self.resistance[4], 0)
         F[5] = max((P[5] - P[6]) / self.resistance[5], 0)
-        F[6] = (P[6] - P[7]) / (self.resistance[6] * fSVR)
+        F[6] = (P[6] - P[7]) / (self.resistance[6] * fSVR)    #
         F[7] = (P[7] - P[8]) / self.resistance[7] #if P[7] - P[8] > 0 else (P[7] - P[8]) / (10 * self.resistance[7])
         F[8] = max((P[8] - P[9]) / self.resistance[8], 0)
         F[9] = max((P[9] - P[0]) / self.resistance[9], 0)   

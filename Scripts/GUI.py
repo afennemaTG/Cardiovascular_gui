@@ -7,23 +7,11 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import sys
 import subprocess
 
-from cardiovascular_model_2 import CardiovascularModel
+from cardiovascular_model import CardiovascularModel
 from presets import pre_sets
 
 
 def solve_ode(t_span, x0, dict):
-
-    # solver = RK45(
-    #     fun = lambda t,x: CM.ext_st_sp_eq(t,x, **dict),
-    #     t0 = t_span[0],
-    #     y0 = x0,
-    #     t_bound = t_span[1],
-    #     max_step = 0.005,
-    # )
-
-    # solver.step()
-    # state = solver.y
-    # t = solver.t
 
     solution = solve_ivp(lambda t,x: CM.ext_st_sp_eq(t,x, **dict), t_span, x0, method='RK45', rtol=1e-8, atol=1e-8)
 
@@ -463,7 +451,7 @@ class ODEGuiApp:
         self.canvas.draw()
 
         for key, slider in self.sliders.items():
-            slider.set(self.dict[key])
+            slider.set(self.dict[key]*100) if key == 'contractility' else slider.set(self.dict[key])
         self.baro_button.config(text="Baroreceptor OFF", bg='tomato') 
         self.vent_button.config(text="Ventilation OFF", bg='tomato')
         self.esvpr_ea_button.config(text="display ESVPR and EA")
@@ -615,10 +603,8 @@ class ODEGuiApp:
             self.t += self.dt
             t_span = (self.t, self.t + self.dt)
 
-            import_dict = CM.export_function()
-            self.HR = import_dict['HR']
-            P_intra = import_dict['P_intra']
-            P = import_dict['P']
+            self.HR = CM.HR_c
+            P = CM.P
             lv_pressure = P[9]
             ao_pressure = P[0]
             la_pressure = P[8]
@@ -674,7 +660,7 @@ class ODEGuiApp:
                 self.saved_lv_volume.append(self.lv_volumes[-1])
                 self.saved_lv_pressure.append(self.lv_pressures[-1])
             
-
+            # Add buffer counter in order to update plot more smoothly
             self.time_elapsed += 1
             self.buffer_counter += 1
             
